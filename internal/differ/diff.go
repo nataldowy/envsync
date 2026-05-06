@@ -6,95 +6,90 @@ import (
 	"strings"
 )
 
-// EntryStatus represents the diff status of a key between two env files.
-type EntryStatus string
+// Status represents the type of difference for a key.
+type Status int
 
 const (
-	StatusAdded   EntryStatus = "added"
-	StatusRemoved EntryStatus = "removed"
-	StatusChanged EntryStatus = "changed"
-	StatusSame    EntryStatus = "same"
+	Added   Status = iota // present in source, missing in target
+	Removed               // missing in source, present in target
+	Changed               // present in both, values differ
+	Same                  // present in both, values equal
 )
 
-// DiffEntry holds the diff result for a single key.
-type DiffEntry struct {
-	Key      string
-	Status   EntryStatus
-	OldValue string
-	NewValue string
+// Entry represents a single diff entry.
+type Entry struct {
+	Key       string
+	SourceVal string
+	TargetVal string
+	Status    Status
 }
 
-// Diff computes the difference between a base env map and a target env map.
-// Keys present in base but not target are "removed".
-// Keys present in target but not base are "added".
-// Keys present in both with different values are "changed".
-// Keys present in both with the same value are "same".
-func Diff(base, target map[string]string) []DiffEntry {
-	keys := make(map[string]struct{})
-	for k := range base {
-		keys[k] = struct{}{}
-	}
-	for k := range target {
-		keys[k] = struct{}{}
-	}
+// Diff computes the difference between source and target env maps.
+func Diff(source, target map[string]string) []Entry {
+	keys := unionKeys(source, target)
+	sort.Strings(keys)
 
-	sortedKeys := make([]string, 0, len(keys))
-	for k := range keys {
-		sortedKeys = append(sortedKeys, k)
-	}
-	sort.Strings(sortedKeys)
-
-	result := make([]DiffEntry, 0, len(sortedKeys))
-	for _, k := range sortedKeys {
-		baseVal, inBase := base[k]
-		targetVal, inTarget := target[k]
+	var entries []Entry
+	for _, k := range keys {
+		sv, inSrc := source[k]
+		tv, inTgt := target[k]
 
 		switch {
-		case inBase && !inTarget:
-			result = append(result, DiffEntry{Key: k, Status: StatusRemoved, OldValue: baseVal})
-		case !inBase && inTarget:
-			result = append(result, DiffEntry{Key: k, Status: StatusAdded, NewValue: targetVal})
-		case baseVal != targetVal:
-			result = append(result, DiffEntry{Key: k, Status: StatusChanged, OldValue: baseVal, NewValue: targetVal})
+		case inSrc && !inTgt:
+			entries = append(entries, Entry{Key: k, SourceVal: sv, Status: Added})
+		case !inSrc && inTgt:
+			entries = append(entries, Entry{Key: k, TargetVal: tv, Status: Removed})
+		case sv != tv:
+			entries = append(entries, Entry{Key: k, SourceVal: sv, TargetVal: tv, Status: Changed})
 		default:
-			result = append(result, DiffEntry{Key: k, Status: StatusSame, OldValue: baseVal, NewValue: targetVal})
+			entries = append(entries, Entry{Key: k, SourceVal: sv, TargetVal: tv, Status: Same})
 		}
 	}
-	return result
+	return entries
 }
 
-// Format returns a human-readable diff string, masking secret values when maskSecrets is true.
-func Format(entries []DiffEntry, maskSecrets bool) string {
+// Format renders a human-readable diff string with optional secret masking.
+func Format(entries []Entry, maskSecrets bool) string {
 	var sb strings.Builder
 	for _, e := range entries {
-		oldVal := e.OldValue
-		newVal := e.NewValue
+		sv := e.SourceVal
+		tv := e.TargetVal
 		if maskSecrets {
-			if oldVal != "" {
-				oldVal = mask(oldVal)
-			}
-			if newVal != "" {
-				newVal = mask(newVal)
-			}
+			sv = mask(sv)
+			tv = mask(tv)
 		}
 		switch e.Status {
-		case StatusAdded:
-			sb.WriteString(fmt.Sprintf("+ %s=%s\n", e.Key, newVal))
-		case StatusRemoved:
-			sb.WriteString(fmt.Sprintf("- %s=%s\n", e.Key, oldVal))
-		case StatusChanged:
-			sb.WriteString(fmt.Sprintf("~ %s: %s -> %s\n", e.Key, oldVal, newVal))
-		case StatusSame:
-			sb.WriteString(fmt.Sprintf("  %s=%s\n", e.Key, newVal))
+		case Added:
+			sb.WriteString(fmt.Sprintf("+ %s=%s\n", e.Key, sv))
+		case Removed:
+			sb.WriteString(fmt.Sprintf("- %s=%s\n", e.Key, tv))
+		case Changed:
+			sb.WriteString(fmt.Sprintf("~ %s: %s -> %s\n", e.Key, tv, sv))
+		case Same:
+			sb.WriteString(fmt.Sprintf("  %s=%s\n", e.Key, sv))
 		}
 	}
 	return sb.String()
 }
 
-// mask replaces all but the first and last character of a value with asterisks.
 func mask(val string) string {
-	if len(val) <= 2 {
-		return strings.Repeat("*", len(val))
+	if len(val) == 0 {
+		return val
 	}
-	return string(val[0]) + strings.Repeat("*", len(val)-2) + string(val[len(val)-1])
+	return strings.Repeat("*", len(val))
+}
+
+func unionKeys(a, b map[string]string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	for k := range a {
+		seen[k] = struct{}{}
+	}
+	for k := range b {
+		seen[k] = struct{}{}
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	return keys
 }
