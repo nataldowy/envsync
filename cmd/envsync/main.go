@@ -40,10 +40,24 @@ func main() {
 			fmt.Fprintln(os.Stderr, "sync requires <source> <target>")
 			os.Exit(1)
 		}
+		if err := validateSyncMode(*syncMode); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		runSync(args[0], args[1], *syncMode)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
+	}
+}
+
+// validateSyncMode returns an error if the given mode is not a recognised sync mode.
+func validateSyncMode(mode string) error {
+	switch mode {
+	case "add", "overwrite":
+		return nil
+	default:
+		return fmt.Errorf("invalid sync mode %q: must be \"add\" or \"overwrite\"", mode)
 	}
 }
 
