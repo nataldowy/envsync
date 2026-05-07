@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/user/envsync/internal/differ"
-	"github.com/user/envsync/internal/parser"
-	"github.com/user/envsync/internal/syncer"
+	"github.com/yourorg/envsync/internal/differ"
+	"github.com/yourorg/envsync/internal/parser"
+	"github.com/yourorg/envsync/internal/resolver"
+	"github.com/yourorg/envsync/internal/syncer"
 )
 
 func main() {
 	diffCmd := flag.NewFlagSet("diff", flag.ExitOnError)
-	diffMask := diffCmd.Bool("mask", false, "mask secret values in output")
-
 	syncCmd := flag.NewFlagSet("sync", flag.ExitOnError)
-	syncOverwrite := syncCmd.Bool("overwrite", false, "overwrite changed keys in target")
+
+	syncMode := syncCmd.String("mode", "add", "sync mode: add|overwrite")
+	resolveVars := diffCmd.Bool("resolve", false, "resolve variable interpolation before diffing")
+	allowMissing := diffCmd.Bool("allow-missing", false, "allow missing variables during resolution")
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: envsync <diff|sync> [options] <source> <target>")
@@ -24,66 +26,65 @@ func main() {
 
 	switch os.Args[1] {
 	case "diff":
-		diffCmd.Parse(os.Args[2:])
+		_ = diffCmd.Parse(os.Args[2:])
 		args := diffCmd.Args()
-		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: envsync diff [--mask] <source> <target>")
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "diff requires <source> <target>")
 			os.Exit(1)
 		}
-		runDiff(args[0], args[1], *diffMask)
-
+		runDiff(args[0], args[1], *resolveVars, *allowMissing)
 	case "sync":
-		syncCmd.Parse(os.Args[2:])
+		_ = syncCmd.Parse(os.Args[2:])
 		args := syncCmd.Args()
-		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: envsync sync [--overwrite] <source> <target>")
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "sync requires <source> <target>")
 			os.Exit(1)
 		}
-		runSync(args[0], args[1], *syncOverwrite)
-
+		runSync(args[0], args[1], *syncMode)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
 	}
 }
 
-func runDiff(src, dst string, maskSecrets bool) {
-	source, err := parser.Parse(src)
+func runDiff(src, dst string, resolveInterp, allowMissing bool) {
+	srcEnv, err := parser.Parse(src)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading source: %v\n", err)
+		fmt.Fprintf(os.Stderr, "parse %s: %v\n", src, err)
 		os.Exit(1)
 	}
-	target, err := parser.Parse(dst)
+	dstEnv, err := parser.Parse(dst)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading target: %v\n", err)
+		fmt.Fprintf(os.Stderr, "parse %s: %v\n", dst, err)
 		os.Exit(1)
 	}
 
-	entries := differ.Diff(source, target)
-	fmt.Print(differ.Format(entries, maskSecrets))
+	if resolveInterp {
+		opts := resolver.DefaultOptions()
+		opts.AllowMissing = allowMissing
+		if srcEnv, err = resolver.Resolve(srcEnv, opts); err != nil {
+			fmt.Fprintf(os.Stderr, "resolve %s: %v\n", src, err)
+			os.Exit(1)
+		}
+		if dstEnv, err = resolver.Resolve(dstEnv, opts); err != nil {
+			fmt.Fprintf(os.Stderr, "resolve %s: %v\n", dst, err)
+			os.Exit(1)
+		}
+	}
+
+	entries := differ.Diff(srcEnv, dstEnv)
+	fmt.Print(differ.Format(entries, true))
 }
 
-func runSync(src, dst string, overwrite bool) {
-	mode := syncer.ModeAddMissing
-	if overwrite {
-		mode = syncer.ModeOverwrite
-	}
-
-	res, err := syncer.Sync(src, dst, mode)
+func runSync(src, dst, mode string) {
+	srcEnv, err := parser.Parse(src)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "parse %s: %v\n", src, err)
 		os.Exit(1)
 	}
-
-	fmt.Printf("added: %d, updated: %d, skipped: %d\n",
-		len(res.Added), len(res.Updated), len(res.Skipped))
-	for _, k := range res.Added {
-		fmt.Printf("  + %s\n", k)
+	if err := syncer.Sync(srcEnv, dst, mode); err != nil {
+		fmt.Fprintf(os.Stderr, "sync: %v\n", err)
+		os.Exit(1)
 	}
-	for _, k := range res.Updated {
-		fmt.Printf("  ~ %s\n", k)
-	}
-	for _, k := range res.Skipped {
-		fmt.Printf("  . %s (skipped)\n", k)
-	}
+	fmt.Printf("synced %s -> %s (mode=%s)\n", src, dst, mode)
 }
