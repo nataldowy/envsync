@@ -99,3 +99,21 @@ func TestSave_InvalidPath(t *testing.T) {
 	}
 	_ = os.RemoveAll("no")
 }
+
+// TestCompare_IdenticalNonEmpty verifies that two snapshots with the same
+// entries produce an empty delta (no false positives for unchanged keys).
+func TestCompare_IdenticalNonEmpty(t *testing.T) {
+	entries := map[string]string{"FOO": "bar", "BAZ": "qux"}
+	old := snapshot.Capture(".env", entries)
+	new := snapshot.Capture(".env", entries)
+	d := snapshot.Compare(old, new)
+	if len(d.Added) != 0 {
+		t.Errorf("expected no Added entries, got %v", d.Added)
+	}
+	if len(d.Removed) != 0 {
+		t.Errorf("expected no Removed entries, got %v", d.Removed)
+	}
+	if len(d.Changed) != 0 {
+		t.Errorf("expected no Changed entries, got %v", d.Changed)
+	}
+}
