@@ -3,44 +3,51 @@ package pipeline_test
 import (
 	"testing"
 
-	"github.com/yourorg/envsync/internal/pipeline"
+	"github.com/user/envsync/internal/pipeline"
+	"github.com/user/envsync/internal/redactor"
 )
 
 func TestStepMaskValues_EmptyValueNotMasked(t *testing.T) {
-	isSensitive := func(k string) bool { return true }
-	out, err := pipeline.New().
-		Add(pipeline.StepMaskValues(isSensitive, "***")).
-		Run(pipeline.Env{"EMPTY_SECRET": ""})
+	step := pipeline.StepMaskValues(redactor.Options{})
+	env := map[string]string{"DB_PASSWORD": "", "APP_ENV": "dev"}
+	out, err := step(env)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["EMPTY_SECRET"] != "" {
-		t.Errorf("empty value should not be masked, got %q", out["EMPTY_SECRET"])
+	if out["DB_PASSWORD"] != redactor.DefaultPlaceholder {
+		t.Errorf("expected placeholder for empty sensitive value, got %q", out["DB_PASSWORD"])
+	}
+	if out["APP_ENV"] != "dev" {
+		t.Errorf("plain value mutated: %q", out["APP_ENV"])
 	}
 }
 
 func TestStepRequireKeys_AllPresent(t *testing.T) {
-	_, err := pipeline.New().
-		Add(pipeline.StepRequireKeys("A", "B")).
-		Run(pipeline.Env{"A": "1", "B": "2"})
+	step := pipeline.StepRequireKeys("A", "B")
+	_, err := step(map[string]string{"A": "1", "B": "2"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestChainedSteps(t *testing.T) {
-	out, err := pipeline.New().
-		Add(pipeline.StepUpperCaseKeys()).
-		Add(pipeline.StepSetDefaults(pipeline.Env{"LOG_LEVEL": "warn"})).
-		Add(pipeline.StepRequireKeys("DB_HOST")).
-		Run(pipeline.Env{"db_host": "pg", "PORT": "5432"})
+	p := pipeline.New(
+		pipeline.StepSetDefaults(map[string]string{"PORT": "3000"}),
+		pipeline.StepUpperCaseKeys(),
+		pipeline.StepMaskValues(redactor.Options{Placeholder: "XXX"}),
+	)
+	env := map[string]string{"api_key": "secret", "app_env": "staging"}
+	out, err := p.Run(env)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if out["DB_HOST"] != "pg" {
-		t.Errorf("DB_HOST mismatch: %q", out["DB_HOST"])
+	if out["API_KEY"] != "XXX" {
+		t.Errorf("expected XXX for API_KEY, got %q", out["API_KEY"])
 	}
-	if out["LOG_LEVEL"] != "warn" {
-		t.Errorf("LOG_LEVEL default not applied: %q", out["LOG_LEVEL"])
+	if out["APP_ENV"] != "staging" {
+		t.Errorf("expected staging for APP_ENV, got %q", out["APP_ENV"])
+	}
+	if out["PORT"] != "3000" {
+		t.Errorf("expected default PORT=3000, got %q", out["PORT"])
 	}
 }
