@@ -27,6 +27,11 @@ type Result struct {
 	Skipped []string
 }
 
+// HasChanges reports whether the sync result contains any added or updated keys.
+func (r *Result) HasChanges() bool {
+	return len(r.Added) > 0 || len(r.Updated) > 0
+}
+
 // Sync applies changes from source env map to the target file.
 // It reads the target file, applies the diff, and writes the result back.
 func Sync(sourceFile, targetFile string, mode SyncMode) (*Result, error) {
